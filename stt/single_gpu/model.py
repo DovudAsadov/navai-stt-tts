@@ -18,7 +18,7 @@ from transformers import (
     Seq2SeqTrainer,
 )
 
-from augmentation import AudioAugmentation
+from stt.multi_gpu.augmentation import AudioAugmentation
 
 load_dotenv()
 
@@ -33,7 +33,7 @@ if HF_TOKEN:
 
 if WANDB_API_KEY:
     wandb.login(key=WANDB_API_KEY)
-wandb.init(project=WANDB_PROJECT, name="whisper-uzbek-stt-multi-gpu")
+wandb.init(project=WANDB_PROJECT, name="whisper-uzbek-stt")
 
 # Initialize audio augmentation
 audio_augmenter = AudioAugmentation()
@@ -62,8 +62,10 @@ except Exception as e:
     print(f"Error loading datasets: {e}")
     exit(1)
 
+
 if "id" in common_voice["train"].column_names:
     common_voice = common_voice.remove_columns(["id"])
+
 
 # Initialize processor and model
 print("Loading Whisper processor and model...")
@@ -114,7 +116,7 @@ common_voice = DatasetDict({
 
 model = WhisperForConditionalGeneration.from_pretrained(MODEL_ID)
 
-# Set model configuration
+# Set model configurationv
 model.generation_config.language = "uzbek"
 model.generation_config.task = "transcribe"
 model.generation_config.forced_decoder_ids = None
@@ -166,18 +168,18 @@ def compute_metrics(pred):
 
     return {"wer": wer}
 
-# UPDATED TRAINING ARGUMENTS FOR MULTI-GPU
 training_args = Seq2SeqTrainingArguments(
     output_dir="./whisper-uzbek-stt",
-    per_device_train_batch_size=8,  # Reduced per device, total will be 8 * num_gpus
-    per_device_eval_batch_size=8,   # Reduced per device
-    gradient_accumulation_steps=2,  # Increased to maintain effective batch size
+    per_device_train_batch_size=16,
+    per_device_eval_batch_size=16,
+    gradient_accumulation_steps=1,
     learning_rate=1e-5,
     warmup_steps=500,
     max_steps=5000,
     gradient_checkpointing=True,
     fp16=True,
     evaluation_strategy="steps",
+    per_device_eval_batch_size=8,
     predict_with_generate=True,
     generation_max_length=225,
     save_steps=1000,
@@ -188,9 +190,6 @@ training_args = Seq2SeqTrainingArguments(
     metric_for_best_model="wer",
     greater_is_better=False,
     push_to_hub=False,
-    # Multi-GPU specific settings
-    dataloader_pin_memory=False,  # Can help with multi-GPU
-    remove_unused_columns=False,
 )
 
 trainer = Seq2SeqTrainer(
@@ -206,10 +205,12 @@ trainer = Seq2SeqTrainer(
 print("Starting training...")
 trainer.train()
 
+
 # Save final model locally
 print("Saving model locally...")
 trainer.save_model("./final_model")
 processor.save_pretrained("./final_model")
+
 
 # Push to hub with correct metadata
 kwargs = {
@@ -218,7 +219,7 @@ kwargs = {
     "dataset_args": "Combined: podcasts, news",
     "language": "uz",
     "model_name": "Whisper Large Uzbek",
-    "finetuned_from": "openai/whisper-large-v3",
+    "finetuned_from": "openai/whisper-large",
     "tasks": "automatic-speech-recognition",
     "tags": ["whisper", "uzbek", "speech-recognition"],
 }

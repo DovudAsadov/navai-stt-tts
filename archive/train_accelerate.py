@@ -19,7 +19,7 @@ from transformers import (
 )
 
 from accelerate import Accelerator
-from augmentation import AudioAugmentation
+from stt.multi_gpu.augmentation import AudioAugmentation
 
 load_dotenv()
 
