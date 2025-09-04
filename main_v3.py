@@ -177,6 +177,44 @@ model.generation_config.language = "uzbek"
 model.generation_config.task = "transcribe"
 model.generation_config.forced_decoder_ids = None
 
+# @dataclass
+# class DataCollatorSpeechSeq2SeqWithPadding:
+#     processor: Any
+#     decoder_start_token_id: int
+
+#     def __call__(self, features: List[Dict[str, Union[List[int], torch.Tensor]]]) -> Dict[str, torch.Tensor]:
+#         # Extract input features and ensure they're properly shaped
+#         input_features = []
+#         for feature in features:
+#             input_feat = feature["input_features"]
+#             # Convert to numpy if it's not already
+#             if isinstance(input_feat, list):
+#                 input_feat = np.array(input_feat)
+#             # Ensure it's 2D [n_mels, time_steps]
+#             if len(input_feat.shape) == 1:
+#                 # If 1D, reshape assuming it's flattened mel spectrogram
+#                 input_feat = input_feat.reshape(80, -1)
+#             elif len(input_feat.shape) > 2:
+#                 # If more than 2D, squeeze extra dimensions
+#                 input_feat = input_feat.squeeze()
+#             input_features.append({"input_features": input_feat})
+        
+#         batch = self.processor.feature_extractor.pad(input_features, return_tensors="pt")
+
+#         # Get tokenized label sequences
+#         label_features = [{"input_ids": feature["labels"]} for feature in features]
+#         labels_batch = self.processor.tokenizer.pad(label_features, return_tensors="pt", padding=True)
+
+#         # Replace padding with -100 to ignore loss correctly
+#         labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
+
+#         # Remove BOS token if present
+#         if (labels[:, 0] == self.decoder_start_token_id).all().cpu().item():
+#             labels = labels[:, 1:]
+
+#         batch["labels"] = labels
+#         return batch
+    
 @dataclass
 class DataCollatorSpeechSeq2SeqWithPadding:
     processor: Any
@@ -187,34 +225,50 @@ class DataCollatorSpeechSeq2SeqWithPadding:
         input_features = []
         for feature in features:
             input_feat = feature["input_features"]
-            # Convert to numpy if it's not already
             if isinstance(input_feat, list):
                 input_feat = np.array(input_feat)
-            # Ensure it's 2D [n_mels, time_steps]
             if len(input_feat.shape) == 1:
-                # If 1D, reshape assuming it's flattened mel spectrogram
-                input_feat = input_feat.reshape(80, -1)
+                input_feat = input_feat.reshape(80, -1)  # [n_mels, time_steps]
             elif len(input_feat.shape) > 2:
-                # If more than 2D, squeeze extra dimensions
                 input_feat = input_feat.squeeze()
             input_features.append({"input_features": input_feat})
         
-        batch = self.processor.feature_extractor.pad(input_features, return_tensors="pt")
+        # Pad input features
+        batch = self.processor.feature_extractor.pad(
+            input_features,
+            return_tensors="pt"
+        )
 
-        # Get tokenized label sequences
+        # Create attention mask for input features
+        if "attention_mask" not in batch:
+            batch["attention_mask"] = torch.ones(
+                batch["input_features"].shape[:-1], dtype=torch.long
+            )
+
+        # Tokenized label sequences
         label_features = [{"input_ids": feature["labels"]} for feature in features]
-        labels_batch = self.processor.tokenizer.pad(label_features, return_tensors="pt")
+        labels_batch = self.processor.tokenizer.pad(
+            label_features,
+            return_tensors="pt",
+            padding=True
+        )
 
-        # Replace padding with -100 to ignore loss correctly
-        labels = labels_batch["input_ids"].masked_fill(labels_batch.attention_mask.ne(1), -100)
+        # Replace padding with -100 so they're ignored in loss
+        labels = labels_batch["input_ids"].masked_fill(
+            labels_batch.attention_mask.ne(1), -100
+        )
 
         # Remove BOS token if present
         if (labels[:, 0] == self.decoder_start_token_id).all().cpu().item():
             labels = labels[:, 1:]
 
         batch["labels"] = labels
+        batch["decoder_attention_mask"] = labels_batch["attention_mask"]  # NEW
+
         return batch
-    
+
+
+
 data_collator = DataCollatorSpeechSeq2SeqWithPadding(
     processor=processor,
     decoder_start_token_id=model.config.decoder_start_token_id,
@@ -242,12 +296,13 @@ def compute_metrics(pred):
 # Training arguments optimized for local dataset
 training_args = Seq2SeqTrainingArguments(
     output_dir="./whisper-uzbek-stt-local",
-    per_device_train_batch_size=4,  # Reduced batch size
-    per_device_eval_batch_size=4,   # Reduced batch size
-    gradient_accumulation_steps=4,  # Increased to maintain effective batch size
+    per_device_train_batch_size=8,  # Reduced batch size
+    per_device_eval_batch_size=8,   # Reduced batch size
+    gradient_accumulation_steps=1,  # Increased to maintain effective batch size
     learning_rate=1e-5,
     warmup_steps=50,  # Reduced for small dataset
-    max_steps=500,    # Reduced for small dataset
+    # max_steps=500,    # Reduced for small dataset
+    num_train_epochs=20,
     gradient_checkpointing=False,  # Disabled to fix the error
     fp16=True,
     predict_with_generate=True,
@@ -267,7 +322,7 @@ training_args = Seq2SeqTrainingArguments(
     save_total_limit=3,
     seed=42,
     # Additional fixes for small dataset training
-    dataloader_num_workers=0,  # Disable multiprocessing for data loading
+    dataloader_num_workers=0,
 )
 
 
