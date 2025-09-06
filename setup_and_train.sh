@@ -168,7 +168,6 @@ num_machines: 1
 num_processes: $GPU_COUNT_CONFIG
 rdzv_backend: static
 same_network: true
-tpu_config: {}
 tpu_env: []
 tpu_use_cluster: false
 tpu_use_sudo: false
